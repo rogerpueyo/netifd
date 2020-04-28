@@ -13,6 +13,7 @@
  */
 
 #include <string.h>
+#include <inttypes.h>
 
 #include "netifd.h"
 #include "device.h"
@@ -22,12 +23,16 @@
 enum {
 	VLANDEV_ATTR_IFNAME,
 	VLANDEV_ATTR_VID,
+	VLANDEV_ATTR_INGRESS_QOS_MAPPING,
+	VLANDEV_ATTR_EGRESS_QOS_MAPPING,
 	__VLANDEV_ATTR_MAX
 };
 
 static const struct blobmsg_policy vlandev_attrs[__VLANDEV_ATTR_MAX] = {
 	[VLANDEV_ATTR_IFNAME] = { "ifname", BLOBMSG_TYPE_STRING },
 	[VLANDEV_ATTR_VID] = { "vid", BLOBMSG_TYPE_INT32 },
+	[VLANDEV_ATTR_INGRESS_QOS_MAPPING] = { "ingress_qos_mapping", BLOBMSG_TYPE_ARRAY },
+	[VLANDEV_ATTR_EGRESS_QOS_MAPPING] = { "egress_qos_mapping", BLOBMSG_TYPE_ARRAY },
 };
 
 static const struct uci_blob_param_list vlandev_attr_list = {
@@ -152,6 +157,42 @@ vlandev_config_init(struct device *dev)
 	device_add_user(&mvdev->parent, basedev);
 }
 
+static size_t vlandev_qos_mappings_list_apply(struct ifla_vlan_qos_mapping *qos_mapping, size_t len, struct blob_attr *list)
+{
+	struct blob_attr *cur;
+	int rem, rc;
+	int i = 0;
+
+	blobmsg_for_each_attr(cur, list, rem) {
+		if (i == len) {
+			netifd_log_message(L_WARNING, "parsing failed: too many (>%d) qos mappings\n", len);
+			return 0;
+		}
+
+		if (blobmsg_type(cur) != BLOBMSG_TYPE_STRING) {
+			netifd_log_message(L_WARNING, "parsing failed: qos mapping attr type != string\n");
+			return 0;
+		}
+
+		if (!blobmsg_check_attr(cur, false)) {
+			netifd_log_message(L_WARNING, "parsing failed: qos mapping attr blobmsg_check_attr() failed\n");
+			return 0;
+		}
+
+		rc = sscanf(blobmsg_data(cur), "%" PRIu32 ":%" PRIu32, &qos_mapping[i].from, &qos_mapping[i].to);
+		if (rc != 2) {
+			netifd_log_message(L_WARNING, "parsing failed: qos mapping not in form <from_nr>:<to_nr>\n");
+			return 0;
+		}
+
+		i++;
+	}
+
+	return i;
+}
+
+
+
 static void
 vlandev_apply_settings(struct vlandev_device *mvdev, struct blob_attr **tb)
 {
@@ -161,9 +202,25 @@ vlandev_apply_settings(struct vlandev_device *mvdev, struct blob_attr **tb)
 	cfg->proto = (mvdev->dev.type == &vlan8021q_device_type) ?
 		VLAN_PROTO_8021Q : VLAN_PROTO_8021AD;
 	cfg->vid = 1;
+	cfg->ingress_qos_mappings_len = 0;
+	cfg->egress_qos_mappings_len = 0;
 
 	if ((cur = tb[VLANDEV_ATTR_VID]))
 		cfg->vid = (uint16_t) blobmsg_get_u32(cur);
+
+	if ((cur = tb[VLANDEV_ATTR_INGRESS_QOS_MAPPING])) {
+		cfg->ingress_qos_mappings_len =
+			vlandev_qos_mappings_list_apply(cfg->ingress_qos_mappings,
+							ARRAY_SIZE(cfg->ingress_qos_mappings),
+							cur);
+	}
+
+	if ((cur = tb[VLANDEV_ATTR_EGRESS_QOS_MAPPING])) {
+		cfg->egress_qos_mappings_len =
+			vlandev_qos_mappings_list_apply(cfg->egress_qos_mappings,
+							ARRAY_SIZE(cfg->egress_qos_mappings),
+							cur);
+	}
 }
 
 static enum dev_change_type

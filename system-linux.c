@@ -1401,9 +1401,10 @@ int system_vlan_del(struct device *dev)
 int system_vlandev_add(struct device *vlandev, struct device *dev, struct vlandev_config *cfg)
 {
 	struct nl_msg *msg;
-	struct nlattr *linkinfo, *data;
+	struct nlattr *linkinfo, *data, *qos;
 	struct ifinfomsg iim = { .ifi_family = AF_UNSPEC };
 	int rv;
+	int i;
 
 	msg = nlmsg_alloc_simple(RTM_NEWLINK, NLM_F_REQUEST | NLM_F_CREATE | NLM_F_EXCL);
 
@@ -1430,6 +1431,22 @@ int system_vlandev_add(struct device *vlandev, struct device *dev, struct vlande
 	if(cfg->proto == VLAN_PROTO_8021AD)
 		netifd_log_message(L_WARNING, "%s Your kernel is older than linux 3.10.0, 802.1ad is not supported defaulting to 802.1q", vlandev->type->name);
 #endif
+
+	if (!(qos = nla_nest_start(msg, IFLA_VLAN_INGRESS_QOS)))
+		goto nla_put_failure;
+	for (i = 0; i < cfg->ingress_qos_mappings_len; i++)
+		nla_put(msg, IFLA_VLAN_QOS_MAPPING,
+			sizeof(cfg->ingress_qos_mappings[i]),
+			&cfg->ingress_qos_mappings[i]);
+	nla_nest_end(msg, qos);
+
+	if (!(qos = nla_nest_start(msg, IFLA_VLAN_EGRESS_QOS)))
+		goto nla_put_failure;
+	for (i = 0; i < cfg->egress_qos_mappings_len; i++)
+		nla_put(msg, IFLA_VLAN_QOS_MAPPING,
+			sizeof(cfg->egress_qos_mappings[i]),
+			&cfg->egress_qos_mappings[i]);
+	nla_nest_end(msg, qos);
 
 	nla_nest_end(msg, data);
 	nla_nest_end(msg, linkinfo);
